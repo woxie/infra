@@ -138,7 +138,6 @@ jobs:
 
             sudo mkdir -p /srv/infra
             sudo chown "$USER":"$(id -gn)" /srv/infra
-            rmdir /srv/infra
             git clone "git@github-infra:${REPOSITORY}.git" /srv/infra
           else
             cd /srv/infra
