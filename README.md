@@ -87,5 +87,5 @@ Required repository secrets:
 
 See:
 
-- `.github/deploy/variables.example`
-- `.github/deploy/secrets.example`
+- `.github/workflows/deploy/variables.example`
+- `.github/workflows/deploy/secrets.example`
