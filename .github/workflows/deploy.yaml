@@ -27,7 +27,7 @@ jobs:
 
       - name: Decrypt stack secrets
         env:
-          SOPS_SECRET_KEY: ${{ secrets.SOPS_SECRET_KEY }}
+          SOPS_AGE_KEY: ${{ secrets.SOPS_SECRET_KEY }}
         run: |
           for file in stacks/*/secrets.env; do
             [ -f "$file" ] || continue
