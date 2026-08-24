@@ -1,0 +1,232 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install SOPS
+        run: |
+          curl -fsSL \
+            https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64 \
+            -o /tmp/sops
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
+
+      - name: Decrypt stack secrets
+        env:
+          SOPS_SECRET_KEY: ${{ secrets.SOPS_SECRET_KEY }}
+        run: |
+          for file in stacks/*/secrets.env; do
+            [ -f "$file" ] || continue
+            dir="$(dirname "$file")"
+            sops --decrypt --output "$dir/.env" "$file"
+            chmod 600 "$dir/.env"
+          done
+
+      - name: Configure VPS SSH
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Prepare VPS repository access
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+          REPO_DEPLOY_KEY: ${{ secrets.REPO_DEPLOY_KEY }}
+        run: |
+          printf '%s\n' "$REPO_DEPLOY_KEY" > /tmp/infra_repo
+          chmod 600 /tmp/infra_repo
+
+          ssh "$VPS_USER@$VPS_HOST" \
+            'mkdir -p ~/.ssh && chmod 700 ~/.ssh'
+
+          scp /tmp/infra_repo \
+            "$VPS_USER@$VPS_HOST:~/.ssh/infra_repo"
+
+          ssh "$VPS_USER@$VPS_HOST" '
+            chmod 600 ~/.ssh/infra_repo
+            touch ~/.ssh/config ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/config ~/.ssh/known_hosts
+
+            if ! grep -q "^Host github-infra$" ~/.ssh/config; then
+              printf "\nHost github-infra\n    HostName github.com\n    User git\n    IdentityFile ~/.ssh/infra_repo\n    IdentitiesOnly yes\n" >> ~/.ssh/config
+            fi
+
+            if ! ssh-keygen -F github.com >/dev/null 2>&1; then
+              ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+            fi
+          '
+
+      - name: Bootstrap VPS
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" \
+            "bash -s -- '$GITHUB_REPOSITORY'" <<'REMOTE'
+          set -euo pipefail
+
+          REPOSITORY="$1"
+
+          if ! command -v git >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y git
+          fi
+
+          if ! command -v docker >/dev/null 2>&1 || ! sudo docker compose version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ca-certificates curl git
+
+            . /etc/os-release
+
+            if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ]; then
+              echo "Unsupported distribution: $ID"
+              exit 1
+            fi
+
+            sudo install -m 0755 -d /etc/apt/keyrings
+            sudo curl -fsSL "https://download.docker.com/linux/$ID/gpg" \
+              -o /etc/apt/keyrings/docker.asc
+            sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+            CODENAME="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
+
+            sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+          Types: deb
+          URIs: https://download.docker.com/linux/$ID
+          Suites: $CODENAME
+          Components: stable
+          Architectures: $(dpkg --print-architecture)
+          Signed-By: /etc/apt/keyrings/docker.asc
+          EOF
+
+            sudo apt-get update
+            sudo apt-get install -y \
+              docker-ce \
+              docker-ce-cli \
+              containerd.io \
+              docker-buildx-plugin \
+              docker-compose-plugin
+          fi
+
+          sudo systemctl enable --now docker
+          sudo usermod -aG docker "$USER" || true
+
+          if [ ! -d /srv/infra/.git ]; then
+            if [ -e /srv/infra ] && [ "$(ls -A /srv/infra 2>/dev/null)" ]; then
+              echo "/srv/infra exists but is not a Git repository."
+              exit 1
+            fi
+
+            sudo mkdir -p /srv/infra
+            sudo chown "$USER":"$(id -gn)" /srv/infra
+            rmdir /srv/infra
+            git clone "git@github-infra:${REPOSITORY}.git" /srv/infra
+          else
+            cd /srv/infra
+            git remote set-url origin "git@github-infra:${REPOSITORY}.git"
+            git fetch --prune origin
+            git reset --hard origin/main
+          fi
+
+          sudo docker network inspect reverse-proxy >/dev/null 2>&1 ||
+            sudo docker network create reverse-proxy
+          REMOTE
+
+      - name: Upload decrypted secrets
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          for file in stacks/*/.env; do
+            [ -f "$file" ] || continue
+
+            stack="$(basename "$(dirname "$file")")"
+
+            scp "$file" \
+              "$VPS_USER@$VPS_HOST:/srv/infra/stacks/$stack/.env"
+
+            ssh "$VPS_USER@$VPS_HOST" \
+              "chmod 600 '/srv/infra/stacks/$stack/.env'"
+          done
+
+      - name: Validate Compose projects
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" <<'REMOTE'
+          set -euo pipefail
+
+          for compose in /srv/infra/stacks/*/compose.yaml; do
+            [ -f "$compose" ] || continue
+
+            dir="$(dirname "$compose")"
+            stack="$(basename "$dir")"
+
+            echo "Validating $stack"
+
+            sudo docker compose \
+              -f "$compose" \
+              --project-directory "$dir" \
+              config -q
+          done
+          REMOTE
+
+      - name: Deploy
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" <<'REMOTE'
+          set -euo pipefail
+
+          deploy() {
+            dir="$1"
+            stack="$(basename "$dir")"
+
+            echo "Deploying $stack"
+
+            sudo docker compose \
+              -f "$dir/compose.yaml" \
+              --project-directory "$dir" \
+              up -d --remove-orphans
+          }
+
+          for dir in /srv/infra/stacks/*; do
+            [ -f "$dir/compose.yaml" ] || continue
+            [ "$(basename "$dir")" = "caddy" ] && continue
+
+            deploy "$dir"
+          done
+
+          if [ -f /srv/infra/stacks/caddy/compose.yaml ]; then
+            deploy /srv/infra/stacks/caddy
+
+            sudo docker compose \
+              -f /srv/infra/stacks/caddy/compose.yaml \
+              --project-directory /srv/infra/stacks/caddy \
+              exec -T caddy \
+              caddy reload --config /etc/caddy/Caddyfile
+          fi
+
+          sudo docker ps
+          REMOTE

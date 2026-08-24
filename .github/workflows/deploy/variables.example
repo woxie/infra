@@ -1,0 +1,5 @@
+# Public IPv4 address or DNS hostname of the VPS
+VPS_HOST=
+
+# Linux account used for SSH
+VPS_USER=ubuntu

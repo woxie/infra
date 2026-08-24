@@ -1,0 +1,11 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$ARCANE_DOMAIN} {
+    reverse_proxy arcane:3552
+}
+
+{$AIOSTREAMS_DOMAIN} {
+    reverse_proxy aiostreams:3000
+}

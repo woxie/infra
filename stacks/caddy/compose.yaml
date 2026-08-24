@@ -1,0 +1,25 @@
+services:
+  caddy:
+    image: caddy:2.11.4
+    restart: unless-stopped
+    env_file:
+      - config.env
+      - .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./conf:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - reverse-proxy
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  reverse-proxy:
+    external: true

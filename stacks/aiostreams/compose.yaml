@@ -1,0 +1,18 @@
+services:
+  aiostreams:
+    image: ghcr.io/viren070/aiostreams:v2.33.1
+    restart: unless-stopped
+    env_file:
+      - config.env
+      - .env
+    volumes:
+      - aiostreams_data:/app/data
+    networks:
+      - reverse-proxy
+
+volumes:
+  aiostreams_data:
+
+networks:
+  reverse-proxy:
+    external: true
