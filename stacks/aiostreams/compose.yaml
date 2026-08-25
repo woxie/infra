@@ -1,6 +1,6 @@
 services:
   aiostreams:
-    image: ghcr.io/viren070/aiostreams:v2.33.1
+    image: ghcr.io/viren070/aiostreams:nightly
     restart: unless-stopped
     env_file:
       - config.env
