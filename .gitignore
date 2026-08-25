@@ -1,1 +1,4 @@
 stacks/*/.env
+stacks/.env.global
+stacks/*/.env.git
+stacks/*/project.env
