@@ -202,12 +202,27 @@ jobs:
             dir="$1"
             stack="$(basename "$dir")"
 
+            echo "Pulling image for $stack"
+
+            sudo docker compose \
+              -f "$dir/compose.yaml" \
+              --project-directory "$dir" \
+              pull
+
             echo "Deploying $stack"
 
             sudo docker compose \
               -f "$dir/compose.yaml" \
               --project-directory "$dir" \
               up -d --remove-orphans
+
+            sudo docker compose \
+              -f "$dir/compose.yaml" \
+              --project-directory "$dir" \
+              ps -q | while read -r container; do
+                sudo docker inspect "$container" \
+                  --format '{{.Name}} {{.Config.Image}} {{.Image}}'
+              done
           }
 
           for dir in /srv/infra/stacks/*; do
