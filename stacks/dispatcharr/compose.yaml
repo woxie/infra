@@ -3,6 +3,8 @@ services:
     image: ghcr.io/dispatcharr/dispatcharr:latest
     restart: unless-stopped
     container_name: dispatcharr
+    env_file:
+      - .env
     volumes:
       - dispatcharr_data:/data
     environment:
