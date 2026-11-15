@@ -9,3 +9,7 @@
 {$AIOSTREAMS_DOMAIN} {
     reverse_proxy aiostreams:3000
 }
+
+{$DISPATCHARR_DOMAIN} {
+    reverse_proxy dispatcharr:9191
+}
